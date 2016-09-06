@@ -1,0 +1,67 @@
+Profiling Go Programs
+A case study
+4 Sep 2016
+Tags: go, golang, profiling, go-torch
+
+Vytautas Šaltenis
+SRE, Uber
+vytas@uber.com
+http://rtfb.lt/
+@rtfb
+
+* Intro: myself
+
+I am me.
+.link http://rtfb.lt
+
+* Profiling tools
+
+- go tool pprof
+- go-torch
+
+* Lolcats!
+
+.image http://media.mnn.com/assets/images/2012/11/pw_1.jpg
+.caption _Lolcat_ by [[http://www.mnn.com][Teh Interwebz]]
+
+* Profilee: Blackfriday
+
+Blackfriday is a markdown processor
+
+- v2 story
+
+.link https://github.com/russross/blackfriday/
+
+* A closer look at that flamegraph
+
+ $ go test -run=^$ -bench=BenchmarkReference -benchmem -cpuprofile prof.cpu
+ $ PATH=$GOPATH/src/github.com/uber/go-torch/FlameGraph:$PATH go-torch blackfriday.v2.test prof.cpu
+
+.image ./base/torch.svg _ 1000
+.link ./base/torch.svg Flamegraph
+
+* Here's the slow code
+
+.code -numbers ./base/inline.go /^func maybeAutoLink/,/^}/
+
+* RFC 3986
+
+  An implementation should accept uppercase letters as equivalent to lowercase
+  in scheme names (e.g., allow "HTTP" as well as "http") for the sake of
+  robustness but should only produce lowercase scheme names for consistency.
+
+* Let's try a fix
+
+.code ./fix1/inline.go /^func hasPrefixCaseInsensitive/,/^}/
+
+And see if it helps:
+
+.link ./fix1/torch.svg Flamegraph
+
+* Recap
+
+- Write the benchmarks! Don't even start with anything else until you have some
+- The tools are really helpful
+- Look for wide slabs in go-torch
+- Look for surprising calls to runtime functions
+- Look for the tall towers of memory allocations
