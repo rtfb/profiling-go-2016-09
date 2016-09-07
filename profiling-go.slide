@@ -19,6 +19,8 @@ I am me.
 - go tool pprof
 - go-torch
 
+.image ./base/torch.svg _ 1000
+
 * Lolcats!
 
 .image http://media.mnn.com/assets/images/2012/11/pw_1.jpg
@@ -32,12 +34,19 @@ Blackfriday is a markdown processor
 
 .link https://github.com/russross/blackfriday/
 
+* Benchmarks
+
+.code -numbers ./esc_test.go /^func Bench/,/^}/
+
 * A closer look at that flamegraph
 
  $ go test -run=^$ -bench=BenchmarkReference -benchmem -cpuprofile prof.cpu
+ BenchmarkReference-8   	     300	   8520734 ns/op	 1544612 B/op	   18817 allocs/op
+ PASS
+ ok  	github.com/russross/blackfriday.v2	3.161s
+
  $ PATH=$GOPATH/src/github.com/uber/go-torch/FlameGraph:$PATH go-torch blackfriday.v2.test prof.cpu
 
-.image ./base/torch.svg _ 1000
 .link ./base/torch.svg Flamegraph
 
 * Here's the slow code
@@ -54,7 +63,11 @@ Blackfriday is a markdown processor
 
 .code ./fix1/inline.go /^func hasPrefixCaseInsensitive/,/^}/
 
-And see if it helps:
+* And see if it helps:
+
+ BenchmarkReference-8   	     500	   5064296 ns/op	 1487506 B/op	   11697 allocs/op
+ PASS
+ ok  	github.com/russross/blackfriday.v2	2.891s
 
 .link ./fix1/torch.svg Flamegraph
 
