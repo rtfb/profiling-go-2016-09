@@ -1,0 +1,1587 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="466" onload="init(evt)" viewBox="0 0 1200 466" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		if (func != null)
+			func = func.replace(/ .*/, "");
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+				return a - b;
+			if (a < b || a > b)
+				return a - b;
+			return matches[b] - matches[a];
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="466.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="449" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="449" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanobject (4 samples, 1.96%)</title><rect x="38.9" y="353" width="23.2" height="15.0" fill="rgb(235,98,13)" rx="2" ry="2" />
+<text text-anchor="" x="41.92" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.(*byteStringReplacer).Replace (4 samples, 1.96%)</title><rect x="490.1" y="193" width="23.1" height="15.0" fill="rgb(232,26,53)" rx="2" ry="2" />
+<text text-anchor="" x="493.10" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >s..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (1 samples, 0.49%)</title><rect x="362.8" y="161" width="5.8" height="15.0" fill="rgb(224,139,53)" rx="2" ry="2" />
+<text text-anchor="" x="365.84" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mcall (2 samples, 0.98%)</title><rect x="1178.4" y="401" width="11.6" height="15.0" fill="rgb(251,75,24)" rx="2" ry="2" />
+<text text-anchor="" x="1181.43" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.findrunnable (1 samples, 0.49%)</title><rect x="1184.2" y="337" width="5.8" height="15.0" fill="rgb(248,35,25)" rx="2" ry="2" />
+<text text-anchor="" x="1187.22" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.makeslice (2 samples, 0.98%)</title><rect x="501.7" y="177" width="11.5" height="15.0" fill="rgb(236,88,19)" rx="2" ry="2" />
+<text text-anchor="" x="504.67" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstring (2 samples, 0.98%)</title><rect x="420.7" y="193" width="11.6" height="15.0" fill="rgb(246,172,24)" rx="2" ry="2" />
+<text text-anchor="" x="423.69" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*Node).Walk (31 samples, 15.20%)</title><rect x="692.5" y="289" width="179.4" height="15.0" fill="rgb(238,191,8)" rx="2" ry="2" />
+<text text-anchor="" x="695.55" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/bla..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).list (1 samples, 0.49%)</title><rect x="1074.3" y="209" width="5.8" height="15.0" fill="rgb(222,22,42)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (4 samples, 1.96%)</title><rect x="1120.6" y="225" width="23.1" height="15.0" fill="rgb(215,15,20)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >g..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.writebarrierptr_nostore1 (1 samples, 0.49%)</title><rect x="698.3" y="241" width="5.8" height="15.0" fill="rgb(219,108,45)" rx="2" ry="2" />
+<text text-anchor="" x="701.33" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.makeSlice (1 samples, 0.49%)</title><rect x="212.5" y="193" width="5.7" height="15.0" fill="rgb(249,182,27)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="669.4" y="145" width="5.8" height="15.0" fill="rgb(207,36,30)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.reimburseSweepCredit (1 samples, 0.49%)</title><rect x="669.4" y="97" width="5.8" height="15.0" fill="rgb(218,76,32)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>html.EscapeString (4 samples, 1.96%)</title><rect x="490.1" y="225" width="23.1" height="15.0" fill="rgb(205,110,51)" rx="2" ry="2" />
+<text text-anchor="" x="493.10" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >h..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="1155.3" y="209" width="5.8" height="15.0" fill="rgb(207,82,37)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcMarkTermination.func1 (1 samples, 0.49%)</title><rect x="62.1" y="321" width="5.7" height="15.0" fill="rgb(234,52,48)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.runMarkdown (188 samples, 92.16%)</title><rect x="85.2" y="337" width="1087.4" height="15.0" fill="rgb(247,25,19)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.runMarkdown</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.futex (1 samples, 0.49%)</title><rect x="62.1" y="241" width="5.7" height="15.0" fill="rgb(221,122,26)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).inline (27 samples, 13.24%)</title><rect x="715.7" y="257" width="156.2" height="15.0" fill="rgb(241,177,50)" rx="2" ry="2" />
+<text text-anchor="" x="718.69" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="669.4" y="177" width="5.8" height="15.0" fill="rgb(211,54,20)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.deferproc (1 samples, 0.49%)</title><rect x="964.4" y="209" width="5.8" height="15.0" fill="rgb(248,47,0)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.runMarkdown (1 samples, 0.49%)</title><rect x="1172.6" y="337" width="5.8" height="15.0" fill="rgb(231,173,18)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mProf_Malloc (1 samples, 0.49%)</title><rect x="1172.6" y="161" width="5.8" height="15.0" fill="rgb(233,176,38)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.step (1 samples, 0.49%)</title><rect x="27.4" y="193" width="5.7" height="15.0" fill="rgb(251,186,31)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.markrootBlock (1 samples, 0.49%)</title><rect x="15.8" y="337" width="5.8" height="15.0" fill="rgb(238,139,42)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (1 samples, 0.49%)</title><rect x="976.0" y="113" width="5.8" height="15.0" fill="rgb(245,58,12)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.NewHTMLRenderer (1 samples, 0.49%)</title><rect x="1155.3" y="321" width="5.8" height="15.0" fill="rgb(219,22,11)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (2 samples, 0.98%)</title><rect x="999.1" y="273" width="11.6" height="15.0" fill="rgb(248,187,45)" rx="2" ry="2" />
+<text text-anchor="" x="1002.12" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (3 samples, 1.47%)</title><rect x="380.2" y="193" width="17.3" height="15.0" fill="rgb(239,123,1)" rx="2" ry="2" />
+<text text-anchor="" x="383.20" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (2 samples, 0.98%)</title><rect x="1120.6" y="129" width="11.6" height="15.0" fill="rgb(217,201,39)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1068.5" y="193" width="5.8" height="15.0" fill="rgb(254,142,2)" rx="2" ry="2" />
+<text text-anchor="" x="1071.53" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.writebarrierptr (1 samples, 0.49%)</title><rect x="698.3" y="257" width="5.8" height="15.0" fill="rgb(254,109,40)" rx="2" ry="2" />
+<text text-anchor="" x="701.33" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render (1 samples, 0.49%)</title><rect x="1172.6" y="305" width="5.8" height="15.0" fill="rgb(237,46,31)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="397.5" y="177" width="5.8" height="15.0" fill="rgb(248,81,45)" rx="2" ry="2" />
+<text text-anchor="" x="400.55" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1155.3" y="273" width="5.8" height="15.0" fill="rgb(206,153,6)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="669.4" y="129" width="5.8" height="15.0" fill="rgb(230,102,29)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="374.4" y="161" width="5.8" height="15.0" fill="rgb(224,4,8)" rx="2" ry="2" />
+<text text-anchor="" x="377.41" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fmt.(*pp).doPrintf (4 samples, 1.96%)</title><rect x="108.3" y="225" width="23.2" height="15.0" fill="rgb(251,137,26)" rx="2" ry="2" />
+<text text-anchor="" x="111.33" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >f..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.secondPass (25 samples, 12.25%)</title><rect x="1010.7" y="289" width="144.6" height="15.0" fill="rgb(232,108,20)" rx="2" ry="2" />
+<text text-anchor="" x="1013.69" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russros..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1074.3" y="129" width="5.8" height="15.0" fill="rgb(229,32,13)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.Split (2 samples, 0.98%)</title><rect x="224.0" y="225" width="11.6" height="15.0" fill="rgb(230,77,11)" rx="2" ry="2" />
+<text text-anchor="" x="227.02" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (1 samples, 0.49%)</title><rect x="1120.6" y="65" width="5.8" height="15.0" fill="rgb(220,152,37)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="507.5" y="113" width="5.7" height="15.0" fill="rgb(208,8,47)" rx="2" ry="2" />
+<text text-anchor="" x="510.45" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.Markdown (1 samples, 0.49%)</title><rect x="1172.6" y="321" width="5.8" height="15.0" fill="rgb(221,100,29)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="154.6" y="193" width="5.8" height="15.0" fill="rgb(211,5,21)" rx="2" ry="2" />
+<text text-anchor="" x="157.61" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="1068.5" y="209" width="5.8" height="15.0" fill="rgb(243,0,7)" rx="2" ry="2" />
+<text text-anchor="" x="1071.53" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (5 samples, 2.45%)</title><rect x="160.4" y="209" width="28.9" height="15.0" fill="rgb(220,40,16)" rx="2" ry="2" />
+<text text-anchor="" x="163.39" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ru..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.pcvalue (1 samples, 0.49%)</title><rect x="27.4" y="209" width="5.7" height="15.0" fill="rgb(236,27,10)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="976.0" y="177" width="5.8" height="15.0" fill="rgb(233,221,44)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanframeworker (2 samples, 0.98%)</title><rect x="27.4" y="241" width="11.5" height="15.0" fill="rgb(241,118,12)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).grow (3 samples, 1.47%)</title><rect x="964.4" y="241" width="17.4" height="15.0" fill="rgb(226,203,13)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).Write (3 samples, 1.47%)</title><rect x="206.7" y="225" width="17.3" height="15.0" fill="rgb(245,123,38)" rx="2" ry="2" />
+<text text-anchor="" x="209.67" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBits.initSpan (1 samples, 0.49%)</title><rect x="976.0" y="81" width="5.8" height="15.0" fill="rgb(206,102,47)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.Index (1 samples, 0.49%)</title><rect x="472.7" y="209" width="5.8" height="15.0" fill="rgb(205,174,19)" rx="2" ry="2" />
+<text text-anchor="" x="475.75" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).fencedCodeBlock (1 samples, 0.49%)</title><rect x="1039.6" y="257" width="5.8" height="15.0" fill="rgb(228,189,49)" rx="2" ry="2" />
+<text text-anchor="" x="1042.61" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.markroot.func1 (2 samples, 0.98%)</title><rect x="27.4" y="321" width="11.5" height="15.0" fill="rgb(222,67,51)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).block (25 samples, 12.25%)</title><rect x="1010.7" y="273" width="144.6" height="15.0" fill="rgb(244,76,54)" rx="2" ry="2" />
+<text text-anchor="" x="1013.69" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russros..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1033.8" y="225" width="5.8" height="15.0" fill="rgb(245,191,14)" rx="2" ry="2" />
+<text text-anchor="" x="1036.82" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="287.6" y="177" width="5.8" height="15.0" fill="rgb(216,172,43)" rx="2" ry="2" />
+<text text-anchor="" x="290.65" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.Parse (80 samples, 39.22%)</title><rect x="692.5" y="305" width="462.8" height="15.0" fill="rgb(238,47,17)" rx="2" ry="2" />
+<text text-anchor="" x="695.55" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.Parse</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstringtmp (1 samples, 0.49%)</title><rect x="362.8" y="145" width="5.8" height="15.0" fill="rgb(248,104,53)" rx="2" ry="2" />
+<text text-anchor="" x="365.84" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).paragraph (1 samples, 0.49%)</title><rect x="1080.1" y="209" width="5.8" height="15.0" fill="rgb(252,114,28)" rx="2" ry="2" />
+<text text-anchor="" x="1083.10" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1172.6" y="193" width="5.8" height="15.0" fill="rgb(254,57,24)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="1161.1" y="305" width="5.8" height="15.0" fill="rgb(206,182,30)" rx="2" ry="2" />
+<text text-anchor="" x="1164.08" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="218.2" y="209" width="5.8" height="15.0" fill="rgb(224,134,7)" rx="2" ry="2" />
+<text text-anchor="" x="221.24" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1062.7" y="177" width="5.8" height="15.0" fill="rgb(242,130,34)" rx="2" ry="2" />
+<text text-anchor="" x="1065.75" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBitsForObject (1 samples, 0.49%)</title><rect x="56.3" y="337" width="5.8" height="15.0" fill="rgb(223,157,28)" rx="2" ry="2" />
+<text text-anchor="" x="59.27" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.Markdown (185 samples, 90.69%)</title><rect x="85.2" y="321" width="1070.1" height="15.0" fill="rgb(222,78,28)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.Markdown</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (2 samples, 0.98%)</title><rect x="1120.6" y="145" width="11.6" height="15.0" fill="rgb(246,153,8)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (2 samples, 0.98%)</title><rect x="1120.6" y="177" width="11.6" height="15.0" fill="rgb(216,201,15)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).isEmpty (1 samples, 0.49%)</title><rect x="1045.4" y="257" width="5.8" height="15.0" fill="rgb(227,165,23)" rx="2" ry="2" />
+<text text-anchor="" x="1048.39" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawbyteslice (1 samples, 0.49%)</title><rect x="1172.6" y="209" width="5.8" height="15.0" fill="rgb(247,140,38)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*Node).AppendChild (1 samples, 0.49%)</title><rect x="1033.8" y="209" width="5.8" height="15.0" fill="rgb(219,160,20)" rx="2" ry="2" />
+<text text-anchor="" x="1036.82" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*nodeWalker).next (2 samples, 0.98%)</title><rect x="692.5" y="273" width="11.6" height="15.0" fill="rgb(213,221,37)" rx="2" ry="2" />
+<text text-anchor="" x="695.55" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fmt.(*pp).printArg (1 samples, 0.49%)</title><rect x="125.7" y="209" width="5.8" height="15.0" fill="rgb(233,118,43)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBitsForSpan (1 samples, 0.49%)</title><rect x="1126.4" y="81" width="5.8" height="15.0" fill="rgb(215,76,11)" rx="2" ry="2" />
+<text text-anchor="" x="1129.37" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="212.5" y="129" width="5.7" height="15.0" fill="rgb(216,224,50)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="1062.7" y="193" width="5.8" height="15.0" fill="rgb(240,22,15)" rx="2" ry="2" />
+<text text-anchor="" x="1065.75" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (1 samples, 0.49%)</title><rect x="519.0" y="225" width="5.8" height="15.0" fill="rgb(249,217,34)" rx="2" ry="2" />
+<text text-anchor="" x="522.02" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime/internal/atomic.Xchg (1 samples, 0.49%)</title><rect x="21.6" y="305" width="5.8" height="15.0" fill="rgb(216,213,49)" rx="2" ry="2" />
+<text text-anchor="" x="24.57" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (1 samples, 0.49%)</title><rect x="976.0" y="65" width="5.8" height="15.0" fill="rgb(239,151,46)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.esc (36 samples, 17.65%)</title><rect x="235.6" y="241" width="208.2" height="15.0" fill="rgb(239,96,38)" rx="2" ry="2" />
+<text text-anchor="" x="238.59" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfr..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstringtmp (1 samples, 0.49%)</title><rect x="513.2" y="209" width="5.8" height="15.0" fill="rgb(235,51,41)" rx="2" ry="2" />
+<text text-anchor="" x="516.24" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBitsSetType (2 samples, 0.98%)</title><rect x="1132.2" y="177" width="11.5" height="15.0" fill="rgb(223,9,30)" rx="2" ry="2" />
+<text text-anchor="" x="1135.16" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="976.0" y="129" width="5.8" height="15.0" fill="rgb(207,70,8)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (204 samples, 100%)</title><rect x="10.0" y="417" width="1180.0" height="15.0" fill="rgb(241,75,37)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="212.5" y="145" width="5.7" height="15.0" fill="rgb(249,6,1)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (1 samples, 0.49%)</title><rect x="1022.3" y="257" width="5.7" height="15.0" fill="rgb(254,48,25)" rx="2" ry="2" />
+<text text-anchor="" x="1025.25" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strconv.appendEscapedRune (1 samples, 0.49%)</title><rect x="125.7" y="129" width="5.8" height="15.0" fill="rgb(240,136,2)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc.func1 (1 samples, 0.49%)</title><rect x="866.1" y="177" width="5.8" height="15.0" fill="rgb(244,135,35)" rx="2" ry="2" />
+<text text-anchor="" x="869.08" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).getRef (1 samples, 0.49%)</title><rect x="779.3" y="225" width="5.8" height="15.0" fill="rgb(216,156,7)" rx="2" ry="2" />
+<text text-anchor="" x="782.31" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1022.3" y="241" width="5.7" height="15.0" fill="rgb(249,161,19)" rx="2" ry="2" />
+<text text-anchor="" x="1025.25" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.escCode (14 samples, 6.86%)</title><rect x="443.8" y="241" width="81.0" height="15.0" fill="rgb(208,171,49)" rx="2" ry="2" />
+<text text-anchor="" x="446.82" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>testing.(*B).runN (188 samples, 92.16%)</title><rect x="85.2" y="369" width="1087.4" height="15.0" fill="rgb(244,144,4)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >testing.(*B).runN</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc_m (1 samples, 0.49%)</title><rect x="866.1" y="161" width="5.8" height="15.0" fill="rgb(212,42,2)" rx="2" ry="2" />
+<text text-anchor="" x="869.08" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawbyteslice (1 samples, 0.49%)</title><rect x="397.5" y="193" width="5.8" height="15.0" fill="rgb(251,227,17)" rx="2" ry="2" />
+<text text-anchor="" x="400.55" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (2 samples, 0.98%)</title><rect x="1120.6" y="161" width="11.6" height="15.0" fill="rgb(226,19,24)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.Parse.func1 (29 samples, 14.22%)</title><rect x="704.1" y="273" width="167.8" height="15.0" fill="rgb(222,122,44)" rx="2" ry="2" />
+<text text-anchor="" x="707.12" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/b..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanblock (1 samples, 0.49%)</title><rect x="15.8" y="321" width="5.8" height="15.0" fill="rgb(231,104,20)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="1074.3" y="81" width="5.8" height="15.0" fill="rgb(242,220,33)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="212.5" y="97" width="5.7" height="15.0" fill="rgb(207,104,50)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (1 samples, 0.49%)</title><rect x="1161.1" y="321" width="5.8" height="15.0" fill="rgb(244,141,50)" rx="2" ry="2" />
+<text text-anchor="" x="1164.08" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.schedule (2 samples, 0.98%)</title><rect x="1178.4" y="353" width="11.6" height="15.0" fill="rgb(248,23,40)" rx="2" ry="2" />
+<text text-anchor="" x="1181.43" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (2 samples, 0.98%)</title><rect x="478.5" y="209" width="11.6" height="15.0" fill="rgb(222,0,43)" rx="2" ry="2" />
+<text text-anchor="" x="481.53" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="507.5" y="97" width="5.7" height="15.0" fill="rgb(219,4,32)" rx="2" ry="2" />
+<text text-anchor="" x="510.45" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>testing.(*B).run1.func1 (1 samples, 0.49%)</title><rect x="1172.6" y="385" width="5.8" height="15.0" fill="rgb(244,119,38)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostringtmp (2 samples, 0.98%)</title><rect x="611.6" y="177" width="11.5" height="15.0" fill="rgb(211,219,22)" rx="2" ry="2" />
+<text text-anchor="" x="614.57" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcBgMarkWorker (12 samples, 5.88%)</title><rect x="15.8" y="385" width="69.4" height="15.0" fill="rgb(213,28,49)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runtime..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="1172.6" y="129" width="5.8" height="15.0" fill="rgb(242,47,45)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="976.0" y="161" width="5.8" height="15.0" fill="rgb(206,37,35)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1068.5" y="225" width="5.8" height="15.0" fill="rgb(245,209,46)" rx="2" ry="2" />
+<text text-anchor="" x="1071.53" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strconv.AppendQuote (1 samples, 0.49%)</title><rect x="125.7" y="161" width="5.8" height="15.0" fill="rgb(222,133,16)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="212.5" y="113" width="5.7" height="15.0" fill="rgb(239,216,25)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (1 samples, 0.49%)</title><rect x="1172.6" y="225" width="5.8" height="15.0" fill="rgb(205,69,34)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>html.UnescapeString (1 samples, 0.49%)</title><rect x="403.3" y="225" width="5.8" height="15.0" fill="rgb(246,50,15)" rx="2" ry="2" />
+<text text-anchor="" x="406.33" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (3 samples, 1.47%)</title><rect x="854.5" y="225" width="17.4" height="15.0" fill="rgb(234,63,54)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (1 samples, 0.49%)</title><rect x="212.5" y="33" width="5.7" height="15.0" fill="rgb(205,155,35)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (9 samples, 4.41%)</title><rect x="623.1" y="225" width="52.1" height="15.0" fill="rgb(207,18,32)" rx="2" ry="2" />
+<text text-anchor="" x="626.14" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runti..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawbyteslice (1 samples, 0.49%)</title><rect x="438.0" y="209" width="5.8" height="15.0" fill="rgb(254,64,54)" rx="2" ry="2" />
+<text text-anchor="" x="441.04" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).grow (1 samples, 0.49%)</title><rect x="212.5" y="65" width="5.7" height="15.0" fill="rgb(221,88,54)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.indexbytebody (2 samples, 0.98%)</title><rect x="455.4" y="193" width="11.6" height="15.0" fill="rgb(207,51,15)" rx="2" ry="2" />
+<text text-anchor="" x="458.39" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).Write (3 samples, 1.47%)</title><rect x="964.4" y="257" width="17.4" height="15.0" fill="rgb(216,58,1)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.maybeAutoLink (10 samples, 4.90%)</title><rect x="796.7" y="241" width="57.8" height="15.0" fill="rgb(211,204,13)" rx="2" ry="2" />
+<text text-anchor="" x="799.67" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).WriteByte (1 samples, 0.49%)</title><rect x="981.8" y="257" width="5.7" height="15.0" fill="rgb(238,56,11)" rx="2" ry="2" />
+<text text-anchor="" x="984.76" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="669.4" y="161" width="5.8" height="15.0" fill="rgb(240,8,22)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.deferproc.func1 (1 samples, 0.49%)</title><rect x="964.4" y="177" width="5.8" height="15.0" fill="rgb(227,123,3)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*Node).AppendChild (1 samples, 0.49%)</title><rect x="767.7" y="241" width="5.8" height="15.0" fill="rgb(239,14,31)" rx="2" ry="2" />
+<text text-anchor="" x="770.75" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).tableHeader (2 samples, 0.98%)</title><rect x="1143.7" y="241" width="11.6" height="15.0" fill="rgb(221,78,42)" rx="2" ry="2" />
+<text text-anchor="" x="1146.73" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>html.EscapeString (12 samples, 5.88%)</title><rect x="299.2" y="209" width="69.4" height="15.0" fill="rgb(214,44,16)" rx="2" ry="2" />
+<text text-anchor="" x="302.22" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >html.Es..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.lock (1 samples, 0.49%)</title><rect x="21.6" y="321" width="5.8" height="15.0" fill="rgb(238,10,36)" rx="2" ry="2" />
+<text text-anchor="" x="24.57" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gentraceback (1 samples, 0.49%)</title><rect x="1172.6" y="97" width="5.8" height="15.0" fill="rgb(220,171,37)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="507.5" y="129" width="5.7" height="15.0" fill="rgb(236,110,27)" rx="2" ry="2" />
+<text text-anchor="" x="510.45" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="10.0" y="385" width="5.8" height="15.0" fill="rgb(226,227,37)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).grow (2 samples, 0.98%)</title><rect x="854.5" y="129" width="11.6" height="15.0" fill="rgb(205,186,43)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc (1 samples, 0.49%)</title><rect x="1120.6" y="81" width="5.8" height="15.0" fill="rgb(205,18,36)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.concatstring2 (15 samples, 7.35%)</title><rect x="536.4" y="225" width="86.7" height="15.0" fill="rgb(250,28,28)" rx="2" ry="2" />
+<text text-anchor="" x="539.37" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runtime.co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.hashGrow (1 samples, 0.49%)</title><rect x="993.3" y="241" width="5.8" height="15.0" fill="rgb(210,185,33)" rx="2" ry="2" />
+<text text-anchor="" x="996.33" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.makeslice (1 samples, 0.49%)</title><rect x="212.5" y="177" width="5.7" height="15.0" fill="rgb(232,224,11)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gosched_m (2 samples, 0.98%)</title><rect x="1178.4" y="385" width="11.6" height="15.0" fill="rgb(250,222,39)" rx="2" ry="2" />
+<text text-anchor="" x="1181.43" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (4 samples, 1.96%)</title><rect x="409.1" y="225" width="23.2" height="15.0" fill="rgb(243,124,50)" rx="2" ry="2" />
+<text text-anchor="" x="412.12" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*Node).Walk (1 samples, 0.49%)</title><rect x="1172.6" y="289" width="5.8" height="15.0" fill="rgb(237,226,53)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (1 samples, 0.49%)</title><rect x="1074.3" y="49" width="5.8" height="15.0" fill="rgb(229,131,25)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.esc (1 samples, 0.49%)</title><rect x="1172.6" y="241" width="5.8" height="15.0" fill="rgb(223,56,11)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (1 samples, 0.49%)</title><rect x="1074.3" y="65" width="5.8" height="15.0" fill="rgb(222,184,8)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mProf_GC (2 samples, 0.98%)</title><rect x="67.8" y="289" width="11.6" height="15.0" fill="rgb(249,131,52)" rx="2" ry="2" />
+<text text-anchor="" x="70.84" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="698.3" y="225" width="5.8" height="15.0" fill="rgb(229,77,10)" rx="2" ry="2" />
+<text text-anchor="" x="701.33" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.(*byteStringReplacer).Replace (12 samples, 5.88%)</title><rect x="299.2" y="177" width="69.4" height="15.0" fill="rgb(205,211,50)" rx="2" ry="2" />
+<text text-anchor="" x="302.22" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >strings..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="1114.8" y="193" width="5.8" height="15.0" fill="rgb(213,125,22)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).paragraph (5 samples, 2.45%)</title><rect x="1091.7" y="257" width="28.9" height="15.0" fill="rgb(241,26,32)" rx="2" ry="2" />
+<text text-anchor="" x="1094.67" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >gi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (3 samples, 1.47%)</title><rect x="854.5" y="193" width="17.4" height="15.0" fill="rgb(249,143,29)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memeqbody (1 samples, 0.49%)</title><rect x="472.7" y="193" width="5.8" height="15.0" fill="rgb(216,20,6)" rx="2" ry="2" />
+<text text-anchor="" x="475.75" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (2 samples, 0.98%)</title><rect x="432.3" y="225" width="11.5" height="15.0" fill="rgb(207,64,38)" rx="2" ry="2" />
+<text text-anchor="" x="435.25" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (4 samples, 1.96%)</title><rect x="1120.6" y="241" width="23.1" height="15.0" fill="rgb(215,223,23)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >g..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).table (6 samples, 2.94%)</title><rect x="1120.6" y="257" width="34.7" height="15.0" fill="rgb(210,113,44)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >gi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcDrain (8 samples, 3.92%)</title><rect x="15.8" y="369" width="46.3" height="15.0" fill="rgb(248,159,1)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runt..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (3 samples, 1.47%)</title><rect x="854.5" y="209" width="17.4" height="15.0" fill="rgb(218,217,14)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="1155.3" y="289" width="5.8" height="15.0" fill="rgb(239,219,0)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstring (1 samples, 0.49%)</title><rect x="513.2" y="193" width="5.8" height="15.0" fill="rgb(246,161,40)" rx="2" ry="2" />
+<text text-anchor="" x="516.24" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.callers.func1 (1 samples, 0.49%)</title><rect x="1172.6" y="113" width="5.8" height="15.0" fill="rgb(240,20,29)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="1155.3" y="241" width="5.8" height="15.0" fill="rgb(228,148,8)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fmt.(*fmt).fmt_q (1 samples, 0.49%)</title><rect x="125.7" y="177" width="5.8" height="15.0" fill="rgb(209,8,15)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scang (2 samples, 0.98%)</title><rect x="27.4" y="305" width="11.5" height="15.0" fill="rgb(218,154,2)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.genSplit (2 samples, 0.98%)</title><rect x="224.0" y="209" width="11.6" height="15.0" fill="rgb(208,210,46)" rx="2" ry="2" />
+<text text-anchor="" x="227.02" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (4 samples, 1.96%)</title><rect x="1120.6" y="193" width="23.1" height="15.0" fill="rgb(231,4,17)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="507.5" y="145" width="5.7" height="15.0" fill="rgb(220,133,0)" rx="2" ry="2" />
+<text text-anchor="" x="510.45" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcSweep (2 samples, 0.98%)</title><rect x="67.8" y="305" width="11.6" height="15.0" fill="rgb(239,123,14)" rx="2" ry="2" />
+<text text-anchor="" x="70.84" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.Map (1 samples, 0.49%)</title><rect x="779.3" y="193" width="5.8" height="15.0" fill="rgb(209,146,11)" rx="2" ry="2" />
+<text text-anchor="" x="782.31" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.futexwakeup (1 samples, 0.49%)</title><rect x="62.1" y="257" width="5.7" height="15.0" fill="rgb(247,55,14)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="79.4" y="353" width="5.8" height="15.0" fill="rgb(215,87,34)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.tag (27 samples, 13.24%)</title><rect x="524.8" y="241" width="156.2" height="15.0" fill="rgb(234,149,8)" rx="2" ry="2" />
+<text text-anchor="" x="527.80" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (1 samples, 0.49%)</title><rect x="1074.3" y="177" width="5.8" height="15.0" fill="rgb(217,119,30)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (2 samples, 0.98%)</title><rect x="27.4" y="337" width="11.5" height="15.0" fill="rgb(228,14,6)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (3 samples, 1.47%)</title><rect x="62.1" y="337" width="17.3" height="15.0" fill="rgb(213,4,31)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.writebarrierptr_nostore1 (1 samples, 0.49%)</title><rect x="767.7" y="209" width="5.8" height="15.0" fill="rgb(237,209,23)" rx="2" ry="2" />
+<text text-anchor="" x="770.75" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc (1 samples, 0.49%)</title><rect x="1155.3" y="161" width="5.8" height="15.0" fill="rgb(216,148,28)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="773.5" y="209" width="5.8" height="15.0" fill="rgb(248,11,23)" rx="2" ry="2" />
+<text text-anchor="" x="776.53" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="773.5" y="225" width="5.8" height="15.0" fill="rgb(252,130,9)" rx="2" ry="2" />
+<text text-anchor="" x="776.53" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="1074.3" y="145" width="5.8" height="15.0" fill="rgb(213,149,25)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.pcdatavalue (1 samples, 0.49%)</title><rect x="27.4" y="225" width="5.7" height="15.0" fill="rgb(235,33,4)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstringtmp (4 samples, 1.96%)</title><rect x="600.0" y="193" width="23.1" height="15.0" fill="rgb(250,139,5)" rx="2" ry="2" />
+<text text-anchor="" x="603.00" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (2 samples, 0.98%)</title><rect x="420.7" y="177" width="11.6" height="15.0" fill="rgb(205,92,11)" rx="2" ry="2" />
+<text text-anchor="" x="423.69" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.Count (5 samples, 2.45%)</title><rect x="443.8" y="209" width="28.9" height="15.0" fill="rgb(205,43,16)" rx="2" ry="2" />
+<text text-anchor="" x="446.82" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >by..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (6 samples, 2.94%)</title><rect x="640.5" y="193" width="34.7" height="15.0" fill="rgb(235,185,47)" rx="2" ry="2" />
+<text text-anchor="" x="643.49" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ru..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawbyteslice (8 samples, 3.92%)</title><rect x="628.9" y="209" width="46.3" height="15.0" fill="rgb(245,26,18)" rx="2" ry="2" />
+<text text-anchor="" x="631.92" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runt..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1062.7" y="209" width="5.8" height="15.0" fill="rgb(208,147,30)" rx="2" ry="2" />
+<text text-anchor="" x="1065.75" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.link (3 samples, 1.47%)</title><rect x="779.3" y="241" width="17.4" height="15.0" fill="rgb(235,31,39)" rx="2" ry="2" />
+<text text-anchor="" x="782.31" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.NewSmartypantsRenderer (1 samples, 0.49%)</title><rect x="1155.3" y="305" width="5.8" height="15.0" fill="rgb(242,139,30)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).isPrefixHeader (1 samples, 0.49%)</title><rect x="1051.2" y="257" width="5.8" height="15.0" fill="rgb(239,10,13)" rx="2" ry="2" />
+<text text-anchor="" x="1054.18" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.makeslice (2 samples, 0.98%)</title><rect x="970.2" y="209" width="11.6" height="15.0" fill="rgb(211,80,51)" rx="2" ry="2" />
+<text text-anchor="" x="973.20" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.BenchmarkReference (188 samples, 92.16%)</title><rect x="85.2" y="353" width="1087.4" height="15.0" fill="rgb(212,15,28)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.BenchmarkReference</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanstack (2 samples, 0.98%)</title><rect x="27.4" y="289" width="11.5" height="15.0" fill="rgb(238,95,7)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render (105 samples, 51.47%)</title><rect x="85.2" y="305" width="607.3" height="15.0" fill="rgb(243,11,18)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).isHRule (1 samples, 0.49%)</title><rect x="1080.1" y="193" width="5.8" height="15.0" fill="rgb(248,66,29)" rx="2" ry="2" />
+<text text-anchor="" x="1083.10" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.growslice (6 samples, 2.94%)</title><rect x="258.7" y="193" width="34.7" height="15.0" fill="rgb(241,24,53)" rx="2" ry="2" />
+<text text-anchor="" x="261.73" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ru..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="1074.3" y="113" width="5.8" height="15.0" fill="rgb(209,147,27)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).out (2 samples, 0.98%)</title><rect x="148.8" y="225" width="11.6" height="15.0" fill="rgb(210,211,0)" rx="2" ry="2" />
+<text text-anchor="" x="151.82" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.markroot (4 samples, 1.96%)</title><rect x="15.8" y="353" width="23.1" height="15.0" fill="rgb(245,108,37)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree (1 samples, 0.49%)</title><rect x="1155.3" y="257" width="5.8" height="15.0" fill="rgb(216,0,31)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="507.5" y="161" width="5.7" height="15.0" fill="rgb(244,98,45)" rx="2" ry="2" />
+<text text-anchor="" x="510.45" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>testing.(*B).launch (188 samples, 92.16%)</title><rect x="85.2" y="385" width="1087.4" height="15.0" fill="rgb(249,23,38)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >testing.(*B).launch</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="293.4" y="193" width="5.8" height="15.0" fill="rgb(242,82,39)" rx="2" ry="2" />
+<text text-anchor="" x="296.43" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstringtmp (2 samples, 0.98%)</title><rect x="368.6" y="193" width="11.6" height="15.0" fill="rgb(242,161,13)" rx="2" ry="2" />
+<text text-anchor="" x="371.63" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).grow (2 samples, 0.98%)</title><rect x="1120.6" y="97" width="11.6" height="15.0" fill="rgb(248,143,1)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (1 samples, 0.49%)</title><rect x="1033.8" y="241" width="5.8" height="15.0" fill="rgb(250,109,2)" rx="2" ry="2" />
+<text text-anchor="" x="1036.82" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="1074.3" y="97" width="5.8" height="15.0" fill="rgb(221,19,38)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (2 samples, 0.98%)</title><rect x="999.1" y="257" width="11.6" height="15.0" fill="rgb(249,35,39)" rx="2" ry="2" />
+<text text-anchor="" x="1002.12" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc (2 samples, 0.98%)</title><rect x="854.5" y="113" width="11.6" height="15.0" fill="rgb(252,189,26)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).Write (2 samples, 0.98%)</title><rect x="148.8" y="209" width="11.6" height="15.0" fill="rgb(222,27,12)" rx="2" ry="2" />
+<text text-anchor="" x="151.82" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.expandTabs (9 samples, 4.41%)</title><rect x="935.5" y="273" width="52.0" height="15.0" fill="rgb(235,26,24)" rx="2" ry="2" />
+<text text-anchor="" x="938.49" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >githu..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).block (2 samples, 0.98%)</title><rect x="1074.3" y="225" width="11.6" height="15.0" fill="rgb(205,7,36)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanblock (1 samples, 0.49%)</title><rect x="33.1" y="225" width="5.8" height="15.0" fill="rgb(227,47,36)" rx="2" ry="2" />
+<text text-anchor="" x="36.14" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime._System (1 samples, 0.49%)</title><rect x="10.0" y="401" width="5.8" height="15.0" fill="rgb(238,105,46)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="785.1" y="209" width="5.8" height="15.0" fill="rgb(218,200,49)" rx="2" ry="2" />
+<text text-anchor="" x="788.10" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.writebarrierptr (1 samples, 0.49%)</title><rect x="767.7" y="225" width="5.8" height="15.0" fill="rgb(250,19,53)" rx="2" ry="2" />
+<text text-anchor="" x="770.75" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (2 samples, 0.98%)</title><rect x="368.6" y="209" width="11.6" height="15.0" fill="rgb(240,9,39)" rx="2" ry="2" />
+<text text-anchor="" x="371.63" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcMarkTermination.func2 (2 samples, 0.98%)</title><rect x="67.8" y="321" width="11.6" height="15.0" fill="rgb(220,143,22)" rx="2" ry="2" />
+<text text-anchor="" x="70.84" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>testing.(*B).runN (1 samples, 0.49%)</title><rect x="1172.6" y="369" width="5.8" height="15.0" fill="rgb(209,58,30)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (2 samples, 0.98%)</title><rect x="970.2" y="193" width="11.6" height="15.0" fill="rgb(254,35,8)" rx="2" ry="2" />
+<text text-anchor="" x="973.20" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.makeSlice (3 samples, 1.47%)</title><rect x="964.4" y="225" width="17.4" height="15.0" fill="rgb(252,48,23)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mprof_GC (2 samples, 0.98%)</title><rect x="67.8" y="273" width="11.6" height="15.0" fill="rgb(242,223,41)" rx="2" ry="2" />
+<text text-anchor="" x="70.84" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.Join (1 samples, 0.49%)</title><rect x="675.2" y="225" width="5.8" height="15.0" fill="rgb(224,167,52)" rx="2" ry="2" />
+<text text-anchor="" x="678.20" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.aeshashstr (1 samples, 0.49%)</title><rect x="987.5" y="241" width="5.8" height="15.0" fill="rgb(250,219,44)" rx="2" ry="2" />
+<text text-anchor="" x="990.55" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memeqbody (1 samples, 0.49%)</title><rect x="467.0" y="193" width="5.7" height="15.0" fill="rgb(233,38,16)" rx="2" ry="2" />
+<text text-anchor="" x="469.96" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stopTheWorldWithSema (1 samples, 0.49%)</title><rect x="79.4" y="337" width="5.8" height="15.0" fill="rgb(251,85,8)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (1 samples, 0.49%)</title><rect x="1166.9" y="321" width="5.7" height="15.0" fill="rgb(251,100,29)" rx="2" ry="2" />
+<text text-anchor="" x="1169.86" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1074.3" y="161" width="5.8" height="15.0" fill="rgb(223,15,43)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.escape (1 samples, 0.49%)</title><rect x="773.5" y="241" width="5.8" height="15.0" fill="rgb(220,8,54)" rx="2" ry="2" />
+<text text-anchor="" x="776.53" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addChild (1 samples, 0.49%)</title><rect x="1114.8" y="209" width="5.8" height="15.0" fill="rgb(212,225,33)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="1166.9" y="305" width="5.7" height="15.0" fill="rgb(248,157,19)" rx="2" ry="2" />
+<text text-anchor="" x="1169.86" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (1 samples, 0.49%)</title><rect x="790.9" y="225" width="5.8" height="15.0" fill="rgb(223,47,14)" rx="2" ry="2" />
+<text text-anchor="" x="793.88" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).cr (9 samples, 4.41%)</title><rect x="137.3" y="241" width="52.0" height="15.0" fill="rgb(224,220,15)" rx="2" ry="2" />
+<text text-anchor="" x="140.25" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >githu..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).RenderNode (1 samples, 0.49%)</title><rect x="1172.6" y="257" width="5.8" height="15.0" fill="rgb(214,63,25)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (4 samples, 1.96%)</title><rect x="1120.6" y="209" width="23.1" height="15.0" fill="rgb(226,199,8)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (1 samples, 0.49%)</title><rect x="785.1" y="225" width="5.8" height="15.0" fill="rgb(217,172,0)" rx="2" ry="2" />
+<text text-anchor="" x="788.10" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.callers (1 samples, 0.49%)</title><rect x="1172.6" y="145" width="5.8" height="15.0" fill="rgb(248,168,28)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mheap).alloc (1 samples, 0.49%)</title><rect x="212.5" y="49" width="5.7" height="15.0" fill="rgb(230,59,26)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.scanstack.func1 (2 samples, 0.98%)</title><rect x="27.4" y="257" width="11.5" height="15.0" fill="rgb(235,138,11)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.profilealloc (1 samples, 0.49%)</title><rect x="1172.6" y="177" width="5.8" height="15.0" fill="rgb(207,42,47)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (1 samples, 0.49%)</title><rect x="1155.3" y="145" width="5.8" height="15.0" fill="rgb(238,103,8)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="212.5" y="161" width="5.7" height="15.0" fill="rgb(224,14,45)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.(*Replacer).Replace (12 samples, 5.88%)</title><rect x="299.2" y="193" width="69.4" height="15.0" fill="rgb(250,129,23)" rx="2" ry="2" />
+<text text-anchor="" x="302.22" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >strings..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.appendLanguageAttr (2 samples, 0.98%)</title><rect x="224.0" y="241" width="11.6" height="15.0" fill="rgb(221,221,21)" rx="2" ry="2" />
+<text text-anchor="" x="227.02" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).renderParagraph (1 samples, 0.49%)</title><rect x="1114.8" y="241" width="5.8" height="15.0" fill="rgb(249,161,50)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcMarkTermination (3 samples, 1.47%)</title><rect x="62.1" y="353" width="17.3" height="15.0" fill="rgb(205,199,11)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).out (6 samples, 2.94%)</title><rect x="189.3" y="241" width="34.7" height="15.0" fill="rgb(231,25,10)" rx="2" ry="2" />
+<text text-anchor="" x="192.31" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >gi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.systemstack (1 samples, 0.49%)</title><rect x="964.4" y="193" width="5.8" height="15.0" fill="rgb(215,79,13)" rx="2" ry="2" />
+<text text-anchor="" x="967.41" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render.func1 (103 samples, 50.49%)</title><rect x="85.2" y="273" width="595.8" height="15.0" fill="rgb(218,220,41)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render.func1</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (5 samples, 2.45%)</title><rect x="160.4" y="225" width="28.9" height="15.0" fill="rgb(224,209,35)" rx="2" ry="2" />
+<text text-anchor="" x="163.39" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >ru..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).Render.func1 (1 samples, 0.49%)</title><rect x="1172.6" y="273" width="5.8" height="15.0" fill="rgb(227,163,20)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="276.1" y="177" width="5.8" height="15.0" fill="rgb(215,178,13)" rx="2" ry="2" />
+<text text-anchor="" x="279.08" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.unlock (1 samples, 0.49%)</title><rect x="1184.2" y="321" width="5.8" height="15.0" fill="rgb(227,108,21)" rx="2" ry="2" />
+<text text-anchor="" x="1187.22" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.markrootSpans (1 samples, 0.49%)</title><rect x="21.6" y="337" width="5.8" height="15.0" fill="rgb(241,215,6)" rx="2" ry="2" />
+<text text-anchor="" x="24.57" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.newobject (3 samples, 1.47%)</title><rect x="854.5" y="241" width="17.4" height="15.0" fill="rgb(230,80,22)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.hasPrefixCaseInsensitive (4 samples, 1.96%)</title><rect x="831.4" y="225" width="23.1" height="15.0" fill="rgb(247,27,28)" rx="2" ry="2" />
+<text text-anchor="" x="834.37" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >g..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBitsSetType (1 samples, 0.49%)</title><rect x="1004.9" y="241" width="5.8" height="15.0" fill="rgb(231,139,5)" rx="2" ry="2" />
+<text text-anchor="" x="1007.90" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (2 samples, 0.98%)</title><rect x="854.5" y="97" width="11.6" height="15.0" fill="rgb(238,95,22)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.concatstrings (15 samples, 7.35%)</title><rect x="536.4" y="209" width="86.7" height="15.0" fill="rgb(243,207,53)" rx="2" ry="2" />
+<text text-anchor="" x="539.37" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runtime.co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="976.0" y="145" width="5.8" height="15.0" fill="rgb(222,73,8)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.ToLower (1 samples, 0.49%)</title><rect x="779.3" y="209" width="5.8" height="15.0" fill="rgb(218,125,22)" rx="2" ry="2" />
+<text text-anchor="" x="782.31" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="1114.8" y="177" width="5.8" height="15.0" fill="rgb(252,25,52)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).list (6 samples, 2.94%)</title><rect x="1057.0" y="257" width="34.7" height="15.0" fill="rgb(232,206,22)" rx="2" ry="2" />
+<text text-anchor="" x="1059.96" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >gi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.BenchmarkReference (1 samples, 0.49%)</title><rect x="1172.6" y="353" width="5.8" height="15.0" fill="rgb(251,126,42)" rx="2" ry="2" />
+<text text-anchor="" x="1175.65" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (1 samples, 0.49%)</title><rect x="669.4" y="113" width="5.8" height="15.0" fill="rgb(209,63,33)" rx="2" ry="2" />
+<text text-anchor="" x="672.41" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (1 samples, 0.49%)</title><rect x="212.5" y="81" width="5.7" height="15.0" fill="rgb(216,94,51)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memclr (1 samples, 0.49%)</title><rect x="281.9" y="177" width="5.7" height="15.0" fill="rgb(207,5,31)" rx="2" ry="2" />
+<text text-anchor="" x="284.86" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcMark (1 samples, 0.49%)</title><rect x="62.1" y="305" width="5.7" height="15.0" fill="rgb(209,100,7)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.heapBitsSetType (1 samples, 0.49%)</title><rect x="1114.8" y="161" width="5.8" height="15.0" fill="rgb(216,89,7)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (1 samples, 0.49%)</title><rect x="1155.3" y="193" width="5.8" height="15.0" fill="rgb(223,59,36)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstringtmp (2 samples, 0.98%)</title><rect x="420.7" y="209" width="11.6" height="15.0" fill="rgb(244,149,46)" rx="2" ry="2" />
+<text text-anchor="" x="423.69" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.escCode (28 samples, 13.73%)</title><rect x="241.4" y="225" width="161.9" height="15.0" fill="rgb(243,55,21)" rx="2" ry="2" />
+<text text-anchor="" x="244.37" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).grow (1 samples, 0.49%)</title><rect x="976.0" y="97" width="5.8" height="15.0" fill="rgb(228,220,15)" rx="2" ry="2" />
+<text text-anchor="" x="978.98" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mallocgc (1 samples, 0.49%)</title><rect x="513.2" y="177" width="5.8" height="15.0" fill="rgb(244,179,8)" rx="2" ry="2" />
+<text text-anchor="" x="516.24" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.(*Buffer).grow (1 samples, 0.49%)</title><rect x="212.5" y="209" width="5.7" height="15.0" fill="rgb(218,19,31)" rx="2" ry="2" />
+<text text-anchor="" x="215.45" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).refill (2 samples, 0.98%)</title><rect x="854.5" y="161" width="11.6" height="15.0" fill="rgb(237,105,48)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.indexbytebody (1 samples, 0.49%)</title><rect x="403.3" y="209" width="5.8" height="15.0" fill="rgb(240,225,24)" rx="2" ry="2" />
+<text text-anchor="" x="406.33" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).grow (1 samples, 0.49%)</title><rect x="1155.3" y="177" width="5.8" height="15.0" fill="rgb(233,7,0)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.helpgc (1 samples, 0.49%)</title><rect x="62.1" y="289" width="5.7" height="15.0" fill="rgb(214,95,20)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*nodeWalker).next (2 samples, 0.98%)</title><rect x="681.0" y="273" width="11.5" height="15.0" fill="rgb(245,49,38)" rx="2" ry="2" />
+<text text-anchor="" x="683.98" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*Node).Walk (105 samples, 51.47%)</title><rect x="85.2" y="289" width="607.3" height="15.0" fill="rgb(237,184,4)" rx="2" ry="2" />
+<text text-anchor="" x="88.20" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.(*Node).Walk</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.Replace (8 samples, 3.92%)</title><rect x="252.9" y="209" width="46.3" height="15.0" fill="rgb(218,215,17)" rx="2" ry="2" />
+<text text-anchor="" x="255.94" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >byte..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>bytes.Replace (8 samples, 3.92%)</title><rect x="443.8" y="225" width="46.3" height="15.0" fill="rgb(227,99,49)" rx="2" ry="2" />
+<text text-anchor="" x="446.82" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >byte..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (1 samples, 0.49%)</title><rect x="1155.3" y="225" width="5.8" height="15.0" fill="rgb(242,89,53)" rx="2" ry="2" />
+<text text-anchor="" x="1158.29" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (1 samples, 0.49%)</title><rect x="1062.7" y="225" width="5.8" height="15.0" fill="rgb(220,15,18)" rx="2" ry="2" />
+<text text-anchor="" x="1065.75" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (1 samples, 0.49%)</title><rect x="675.2" y="209" width="5.8" height="15.0" fill="rgb(237,127,27)" rx="2" ry="2" />
+<text text-anchor="" x="678.20" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).listItem (6 samples, 2.94%)</title><rect x="1057.0" y="241" width="34.7" height="15.0" fill="rgb(248,119,14)" rx="2" ry="2" />
+<text text-anchor="" x="1059.96" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >gi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcache).nextFree.func1 (2 samples, 0.98%)</title><rect x="854.5" y="177" width="11.6" height="15.0" fill="rgb(244,102,48)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.rawstring (1 samples, 0.49%)</title><rect x="374.4" y="177" width="5.8" height="15.0" fill="rgb(253,0,2)" rx="2" ry="2" />
+<text text-anchor="" x="377.41" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).RenderNode (102 samples, 50.00%)</title><rect x="91.0" y="257" width="590.0" height="15.0" fill="rgb(245,176,13)" rx="2" ry="2" />
+<text text-anchor="" x="93.98" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russross/blackfriday%2ev2.(*HTMLRenderer).RenderNode</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.stringtoslicebyte (4 samples, 1.96%)</title><rect x="380.2" y="209" width="23.1" height="15.0" fill="rgb(221,132,41)" rx="2" ry="2" />
+<text text-anchor="" x="383.20" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.writebarrierptr_nostore1.func1 (1 samples, 0.49%)</title><rect x="698.3" y="209" width="5.8" height="15.0" fill="rgb(212,60,28)" rx="2" ry="2" />
+<text text-anchor="" x="701.33" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.slicebytetostring (1 samples, 0.49%)</title><rect x="513.2" y="225" width="5.8" height="15.0" fill="rgb(222,58,23)" rx="2" ry="2" />
+<text text-anchor="" x="516.24" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (2 samples, 0.98%)</title><rect x="854.5" y="145" width="11.6" height="15.0" fill="rgb(216,206,12)" rx="2" ry="2" />
+<text text-anchor="" x="857.51" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gentraceback (2 samples, 0.98%)</title><rect x="27.4" y="273" width="11.5" height="15.0" fill="rgb(231,206,33)" rx="2" ry="2" />
+<text text-anchor="" x="30.35" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.gcMarkDone (4 samples, 1.96%)</title><rect x="62.1" y="369" width="23.1" height="15.0" fill="rgb(211,228,42)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >r..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.isReference (2 samples, 0.98%)</title><rect x="987.5" y="273" width="11.6" height="15.0" fill="rgb(212,171,7)" rx="2" ry="2" />
+<text text-anchor="" x="990.55" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.goexit (201 samples, 98.53%)</title><rect x="15.8" y="401" width="1162.6" height="15.0" fill="rgb(236,183,26)" rx="2" ry="2" />
+<text text-anchor="" x="18.78" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >runtime.goexit</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fmt.(*pp).fmtBytes (1 samples, 0.49%)</title><rect x="125.7" y="193" width="5.8" height="15.0" fill="rgb(223,34,12)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.notewakeup (1 samples, 0.49%)</title><rect x="62.1" y="273" width="5.7" height="15.0" fill="rgb(220,110,40)" rx="2" ry="2" />
+<text text-anchor="" x="65.06" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strings.(*Replacer).Replace (4 samples, 1.96%)</title><rect x="490.1" y="209" width="23.1" height="15.0" fill="rgb(211,128,44)" rx="2" ry="2" />
+<text text-anchor="" x="493.10" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >s..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).code (2 samples, 0.98%)</title><rect x="1028.0" y="257" width="11.6" height="15.0" fill="rgb(226,40,45)" rx="2" ry="2" />
+<text text-anchor="" x="1031.04" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>fmt.Sprintf (4 samples, 1.96%)</title><rect x="108.3" y="241" width="23.2" height="15.0" fill="rgb(238,213,0)" rx="2" ry="2" />
+<text text-anchor="" x="111.33" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >f..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.goschedImpl (2 samples, 0.98%)</title><rect x="1178.4" y="369" width="11.6" height="15.0" fill="rgb(230,175,12)" rx="2" ry="2" />
+<text text-anchor="" x="1181.43" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.mapassign1 (2 samples, 0.98%)</title><rect x="987.5" y="257" width="11.6" height="15.0" fill="rgb(232,183,24)" rx="2" ry="2" />
+<text text-anchor="" x="990.55" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).addBlock (1 samples, 0.49%)</title><rect x="1114.8" y="225" width="5.8" height="15.0" fill="rgb(231,200,14)" rx="2" ry="2" />
+<text text-anchor="" x="1117.80" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.memmove (3 samples, 1.47%)</title><rect x="582.6" y="193" width="17.4" height="15.0" fill="rgb(224,100,39)" rx="2" ry="2" />
+<text text-anchor="" x="585.65" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.firstPass (24 samples, 11.76%)</title><rect x="871.9" y="289" width="138.8" height="15.0" fill="rgb(227,65,7)" rx="2" ry="2" />
+<text text-anchor="" x="874.86" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >github.com/russro..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>strconv.appendQuotedWith (1 samples, 0.49%)</title><rect x="125.7" y="145" width="5.8" height="15.0" fill="rgb(217,144,40)" rx="2" ry="2" />
+<text text-anchor="" x="128.69" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>runtime.(*mcentral).cacheSpan (2 samples, 0.98%)</title><rect x="1120.6" y="113" width="11.6" height="15.0" fill="rgb(208,217,25)" rx="2" ry="2" />
+<text text-anchor="" x="1123.59" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).isHRule (1 samples, 0.49%)</title><rect x="1085.9" y="225" width="5.8" height="15.0" fill="rgb(251,141,51)" rx="2" ry="2" />
+<text text-anchor="" x="1088.88" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*HTMLRenderer).addAbsPrefix (1 samples, 0.49%)</title><rect x="131.5" y="241" width="5.8" height="15.0" fill="rgb(211,201,19)" rx="2" ry="2" />
+<text text-anchor="" x="134.47" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>github.com/russross/blackfriday%2ev2.(*parser).listItem (1 samples, 0.49%)</title><rect x="1074.3" y="193" width="5.8" height="15.0" fill="rgb(247,46,4)" rx="2" ry="2" />
+<text text-anchor="" x="1077.31" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>

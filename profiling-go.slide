@@ -71,6 +71,31 @@ Blackfriday is a markdown processor
 
 .link ./fix1/torch.svg Flamegraph
 
+* Fix 2: don't regexp
+
+  go test -run=^$ -bench=BenchmarkReference -benchmem -cpuprofile prof.cpu
+  BenchmarkReference-8   	     300	   4726593 ns/op	 1468315 B/op	   11255 allocs/op
+  PASS
+  ok  	github.com/russross/blackfriday.v2	1.965s
+
+.link ./fix2/torch.svg Flamegraph
+
+* Fix 3: producing HTML elt
+
+.code ./base/html.go /^func tag/,/^}/
+
+* A tiny sample of a large fix
+
+.code ./fix3/html.go /^func \(r \*HTMLRenderer\) tag/,/^}/
+
+* And see if it helps:
+
+  BenchmarkReference-8   	     500	   4471156 ns/op	 1445244 B/op	    9314 allocs/op
+  PASS
+  ok  	github.com/russross/blackfriday.v2	2.563s
+
+.link ./fix3/torch.svg Flamegraph
+
 * Recap
 
 - Write the benchmarks! Don't even start with anything else until you have some
