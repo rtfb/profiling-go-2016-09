@@ -137,8 +137,16 @@ After:
 
 * Recap
 
-- Write the benchmarks! Don't even start with anything else until you have some
+- Write the benchmarks! Don't touch the code until you have some
 - The tools are really helpful
 - Look for wide slabs in go-torch
 - Look for surprising calls to runtime functions
 - Look for the tall towers of memory allocations
+
+* Further reading/seeing
+
+Dave Cheney - Seven ways to Profile Go Applications:
+.link https://www.youtube.com/watch?v=2h_NFBFrciI
+
+Prashant Varanasi - Profiling and Optimizing Go:
+.link https://www.youtube.com/watch?v=N3PWzBeLX2M
