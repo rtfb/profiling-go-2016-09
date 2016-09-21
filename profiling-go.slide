@@ -11,7 +11,9 @@ http://rtfb.lt/
 
 * Intro: myself
 
-I am me.
+~4yrs a hobbyist Gopher
+~5months a professional Gopher
+
 .link http://rtfb.lt
 
 * Profilee: Blackfriday
@@ -28,11 +30,6 @@ Blackfriday is a markdown processor
 - go-torch
 
 .image ./base/torch.svg _ 1000
-
-* Lolcats!
-
-.image http://media.mnn.com/assets/images/2012/11/pw_1.jpg
-.caption _Lolcat_ by [[http://www.mnn.com][Teh Interwebz]]
 
 * Benchmarks
 
