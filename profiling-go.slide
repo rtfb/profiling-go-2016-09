@@ -61,11 +61,13 @@ Generate the flamegraph:
 
 .code -numbers ./base/inline.go /^func maybeAutoLink/,/^}/
 
-* RFC 3986
+* RFC 3986 - Uniform Resource Identifier
 
   An implementation should accept uppercase letters as equivalent to lowercase
   in scheme names (e.g., allow "HTTP" as well as "http") for the sake of
   robustness but should only produce lowercase scheme names for consistency.
+
+.link https://tools.ietf.org/html/rfc3986#section-3.1
 
 * Let's try a fix
 
