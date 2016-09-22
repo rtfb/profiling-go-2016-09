@@ -40,7 +40,7 @@ var tests = [][]byte{
 
 func BenchmarkEscapeHTML(b *testing.B) { // HL
 	var buff bytes.Buffer
-	for n := 0; n < b.N; n++ {
+	for n := 0; n < b.N; n++ { // HL
 		for _, t := range tests {
 			escapeHTML(&buff, t)
 			buff.Reset()
