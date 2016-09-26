@@ -1,6 +1,6 @@
 Profiling Go Programs
 A case study
-4 Sep 2016
+22 Sep 2016
 Tags: go, golang, profiling, go-torch
 
 Vytautas Šaltenis
@@ -16,7 +16,7 @@ http://rtfb.lt/
 
 .link http://rtfb.lt
 
-* Profilee: Blackfriday
+* Intro: Blackfriday
 
 Blackfriday is a markdown processor
 
@@ -136,10 +136,10 @@ After:
 
 * Recap
 
-- Write the benchmarks! Don't touch the code until you have some
+- Write the benchmarks! Don't tune the code until you have some
 - The tools are really helpful
 - Look for wide slabs in go-torch
-- Look for surprising calls to runtime functions
+- Look for unexpected/suspicious calls to runtime functions
 - Look for the tall towers of memory allocations
 
 * Further reading/seeing
